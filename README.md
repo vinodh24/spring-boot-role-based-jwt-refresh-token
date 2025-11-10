@@ -1,20 +1,17 @@
 # 🚀 Spring Boot 3 – Role-Based Authentication & Authorization using JWT
 
-This project demonstrates **JWT-based authentication** and **role-based access control (RBAC)** using **Spring Boot 3**, **Spring Security 6**, and **Java 21**.  
-It supports two roles: `ADMIN` and `USER`, and secures REST APIs accordingly.
+This project demonstrates JWT-based authentication with role-based access control (RBAC) using Spring Boot 3, Spring Security 6 and Java 21. It now implements a safer refresh-token flow: short-lived access tokens (JWT) and long-lived refresh tokens persisted server-side and rotated on use.
 
 ---
 
-## 🧩 Tech Stack
+## Quick Tech & Features
 
-- **Java 21**
-- **Spring Boot 3.1.6**
-- **Spring Security 6**
-- **Spring Data JPA (Hibernate)**
-- **MySQL Database**
-- **JWT (io.jsonwebtoken 0.11.5)**
-- **SpringDoc OpenAPI (Swagger UI)**
-- **Maven**
+- Java 21, Spring Boot 3.1.6, Spring Security 6
+- JWT access tokens (short-lived)
+- Refresh tokens persisted and rotated (server-side)
+- Roles: ADMIN, USER
+- BCrypt password hashing
+- Swagger UI
 
 ---
 
@@ -111,104 +108,196 @@ To test easily, open the built-in Swagger UI:
 
 👉 http://localhost:8080/swagger-ui/index.html
 
-## 🔁 Updated Refresh-Token Flow (important)
+## Usage: endpoints, requests and responses
 
-This project now follows a safer refresh-token approach. Key points:
+Below are concise, copy-pastable examples that match the project's preferred flow. Preferred approach: store refresh token in a Secure, HttpOnly cookie. Alternative: accept refresh token in request body.
 
-- We issue two tokens on successful authentication:
-  - Access Token: short-lived JWT (used for Authorization header).
-  - Refresh Token: long-lived token persisted in the database and tied to a user.
-- Refresh tokens are rotated: when a refresh is used, issue a new refresh token and invalidate the previous one.
-- Refresh tokens should be stored securely (recommendation: HttpOnly, Secure cookie). If you accept them in the JSON body, validate and rotate them the same way.
-- Provide explicit logout endpoint to delete the refresh token from the database.
+---
 
-Why the change?
-- Prevents long-lived JWT misuse.
-- Enables server-side revocation.
-- Supports refresh token rotation to mitigate stolen token replay.
+### 1) Register user
+Endpoint:
+POST /api/auth/register
 
-### Endpoints (recommended)
-
-- POST /api/auth/login
-  - Request: { "email": "...", "password": "..." }
-  - Response (recommendation):
-    - Body: { "accessToken": "<jwt>", "expiresIn": 900 }  // short expiry in seconds
-    - HttpOnly cookie: refreshToken=<long-lived-token>; Path=/api/auth/refresh-token; Secure; HttpOnly; SameSite=Strict
-
-- POST /api/auth/refresh-token
-  - Accepts refresh token from HttpOnly cookie or in request body: { "refreshToken": "..." }
-  - Validates server-side, rotates refresh token, returns:
-    - Body: { "accessToken": "<new-jwt>", "expiresIn": 900 }
-    - Set-Cookie: new refresh token (HttpOnly, Secure)
-
-- POST /api/auth/logout
-  - Invalidates/deletes refresh token for the user (server-side).
-  - Clears the refresh-token cookie.
-
-### Example: Refresh request (preferred via cookie)
 Request:
-- POST /api/auth/refresh-token
-- Cookie: refreshToken=<token>
+```json
+{
+  "firstName": "vinodh",
+  "lastName": "sangavaram",
+  "email": "vinodh.sangavaram@vcti.io",
+  "password": "vinodh"
+}
+```
 
-Response:
-- 200 OK
-- JSON: { "accessToken": "<new-access-token>", "expiresIn": 900 }
-- Cookie: refreshToken=<rotated-token>; HttpOnly; Secure
+Response (201 Created):
+```json
+{
+  "username": "vinodh.sangavaram@vcti.io",
+  "enabled": true,
+  "authorities": [
+    { "authority": "USER" }
+  ],
+  "accountNonLocked": true,
+  "credentialsNonExpired": true,
+  "accountNonExpired": true
+}
+```
 
-### Developer notes — minimal controller/service edits
+---
 
-To implement this with minimal invasive changes, edit the following components:
+### 2) Login (issue access + refresh tokens)
+Endpoint:
+POST /api/auth/login
 
-1. AuthController (or equivalent)
-   - Login:
-     - After successful authentication, call RefreshTokenService.createRefreshToken(userId) and set refresh token either in an HttpOnly cookie or return it in the response body (HttpOnly cookie preferred).
-     - Return access token in the response body.
-   - Refresh-token endpoint:
-     - New endpoint: POST /api/auth/refresh-token
-     - Read refresh token (cookie preferred). If in body, accept { "refreshToken": "..." }.
-     - Call RefreshTokenService.verifyAndRotate(refreshToken) which:
-       - Finds refresh token entity, verifies not expired, deletes old token, creates and returns a new refresh token.
-     - Generate a new access token (JwtService.createAccessToken(user)).
-     - Return new access token and set rotated refresh token cookie.
-   - Logout:
-     - Delete refresh tokens for the user with RefreshTokenService.deleteByUserId(userId).
-     - Clear cookie.
+Request:
+```json
+{
+  "email": "vinodh.sangavaram@vcti.io",
+  "password": "vinodh"
+}
+```
 
-2. RefreshTokenService (new/modify)
-   - Methods:
-     - createRefreshToken(userId): persist token with expiry and return token string.
-     - verifyAndRotate(token): validate, remove old, create new (returns new token).
-     - deleteByUserId(userId): remove tokens on logout.
-   - Store tokens in a refresh_token table with columns: id, user_id, token, expiry_date, created_date.
+Preferred Response (HttpOnly cookie for refresh token):
+- Status: 200 OK
+- Body:
+```json
+{
+  "accessToken": "<JWT_ACCESS_TOKEN>",
+  "expiresIn": 900
+}
+```
+- Set-Cookie header (example):
+Set-Cookie: refreshToken=<REFRESH_TOKEN>; Path=/api/auth/refresh-token; HttpOnly; Secure; SameSite=Strict; Max-Age=604800
 
-3. JwtService / Token Utility
-   - Keep generating short-lived access tokens.
-   - You may reuse existing JWT methods; refresh tokens SHOULD be random UUIDs stored server-side (not necessarily JWTs).
+Alternative Response (if you return refresh token in body — not recommended):
+```json
+{
+  "accessToken": "<JWT_ACCESS_TOKEN>",
+  "expiresIn": 900,
+  "refreshToken": "<LONG_LIVED_TOKEN>"
+}
+```
 
-4. Security configuration
-   - Permit /api/auth/refresh-token and /api/auth/login and /api/auth/register.
-   - Keep stateless session management (SessionCreationPolicy.STATELESS).
-   - No need to change access token filters; they remain the same.
+Notes:
+- accessToken is a JWT intended for Authorization: Bearer <token>
+- expiresIn is seconds until access token expiry (recommend 5–15 minutes)
+- refreshToken is a long random token (UUID stored server-side) — rotate on use
 
-5. DB migration
-   - Add table refresh_token (id BIGINT PK, token VARCHAR unique, user_id FK, expiry TIMESTAMP).
+---
+
+### 3) Refresh access token
+Endpoint:
+POST /api/auth/refresh-token
+
+Preferred: send refresh token via HttpOnly cookie. Server reads cookie, validates, rotates token and returns new access token and a new refresh cookie.
+
+Request (cookie):
+Cookie: refreshToken=<OLD_REFRESH_TOKEN>
+
+Request (alternative body):
+```json
+{
+  "refreshToken": "<OLD_REFRESH_TOKEN>"
+}
+```
+
+Response (200 OK):
+- Body:
+```json
+{
+  "accessToken": "<NEW_JWT_ACCESS_TOKEN>",
+  "expiresIn": 900
+}
+```
+- Set-Cookie:
+Set-Cookie: refreshToken=<ROTATED_REFRESH_TOKEN>; Path=/api/auth/refresh-token; HttpOnly; Secure; SameSite=Strict; Max-Age=604800
+
+Error cases:
+- 401 Unauthorized — refresh token invalid or expired
+- 403 Forbidden — token reuse detected (optional server policy)
+
+---
+
+### 4) Logout (revoke refresh tokens)
+Endpoint:
+POST /api/auth/logout
+
+Request:
+- Prefer authenticated request (Authorization: Bearer <accessToken>) OR read user id from session context
+- Optional: include refresh token cookie or body to target a specific token
+
+Response (200 OK):
+- Body:
+```json
+{ "message": "Logged out successfully" }
+```
+- Set-Cookie to clear:
+Set-Cookie: refreshToken=; Path=/api/auth/refresh-token; HttpOnly; Secure; Max-Age=0
+
+Behavior:
+- Server deletes refresh token(s) for the user (or the specific token)
+- Access tokens (JWT) remain valid until expiry — rely on short lifetime
+
+---
+
+## Minimal developer guidance — what to change in code
+
+1. AuthController
+- Login:
+  - Authenticate user.
+  - Create access token via JwtService.
+  - Create refresh token via RefreshTokenService.createRefreshToken(userId).
+  - Return access token in JSON and set refresh token as HttpOnly cookie (preferred).
+- Refresh-token endpoint (POST /api/auth/refresh-token):
+  - Read refresh token from cookie (preferred) or body.
+  - Call RefreshTokenService.verifyAndRotate(oldToken) -> returns new token or throws.
+  - Issue new access token and set rotated refresh token cookie.
+- Logout:
+  - Call RefreshTokenService.deleteByUserId(userId) or delete specific token.
+  - Clear refresh cookie.
+
+2. RefreshTokenService (new)
+- createRefreshToken(userId): persist token string + expiry.
+- verifyAndRotate(token): validate, remove old, create new token (return new token string).
+- deleteByUserId(userId): remove tokens when user logs out.
+
+3. RefreshToken entity / DB
+- Table: refresh_token
+  - id BIGINT PK
+  - token VARCHAR UNIQUE
+  - user_id FK
+  - expiry_date TIMESTAMP
+  - created_date TIMESTAMP
+
+4. JwtService
+- Continue issuing short-lived JWT access tokens.
+- Use existing claims (subject = email, roles).
+- Do not use JWT for refresh tokens (prefer opaque random tokens stored server-side).
+
+5. SecurityConfig
+- Permit endpoints:
+  - /api/auth/login
+  - /api/auth/register
+  - /api/auth/refresh-token
+- Keep stateless session policy.
 
 6. DTOs
-   - Adjust LoginResponse to include accessToken and expiresIn (and do not expose refresh token in JSON when you set it as HttpOnly cookie).
+- LoginResponse: { accessToken, expiresIn }
+- Avoid returning refreshToken in JSON when you set it as HttpOnly cookie.
 
-### Checklist before merging
-- [ ] Implement RefreshToken entity + repository.
-- [ ] Implement RefreshTokenService with rotation and deletion.
-- [ ] Add refresh-token endpoint to AuthController.
-- [ ] Update login flow to issue refresh token cookie.
-- [ ] Update logout to delete server-side refresh tokens.
-- [ ] Update SecurityConfig to allow refresh endpoint.
-- [ ] Add DB migration or JPA entity for refresh_token.
-- [ ] Update README examples/Swagger docs if you expose refresh-token endpoints.
+---
 
-### Security best practices
-- Use HttpOnly, Secure cookies for refresh tokens when possible.
-- Rotate refresh tokens on use.
-- Keep access token lifetime short (e.g., 5–15 minutes).
-- Keep refresh token lifetime longer but limited (e.g., days/weeks).
-- Log and monitor refresh-token usage; revoke suspicious tokens.
+## Checklist
+- [ ] Add RefreshToken entity + repo
+- [ ] Implement RefreshTokenService (rotation + deletion)
+- [ ] Add refresh-token endpoint and update AuthController
+- [ ] Issue refresh token as HttpOnly cookie on login and rotate on refresh
+- [ ] Revoke refresh tokens on logout
+- [ ] Update DB schema/migration
+
+---
+
+## Security best practices (summary)
+- Use HttpOnly + Secure cookies for refresh tokens when possible.
+- Rotate refresh tokens on each use.
+- Log suspicious refresh-token activity and revoke tokens when reuse detected.
+- Keep access tokens short-lived.
