@@ -24,9 +24,13 @@ import org.springframework.security.web.authentication.WebAuthenticationDetailsS
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger logger = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     @Autowired
     private  IJwtService jwtService;
@@ -40,18 +44,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         final String userEmail;
 
         if (StringUtils.isEmpty(authHeader) || !StringUtils.startsWith(authHeader,"Bearer")) {
+            // no auth header - continue filter chain
             filterChain.doFilter(request,response);
             return;
         }
 
         jwt = authHeader.substring(7);
+        logger.debug("JWT extracted (masked) for request {}: {}", request.getRequestURI(), (jwt.length() > 10 ? jwt.substring(0,6)+"...": "masked"));
 
         try {
             userEmail = jwtService.extractUserName(jwt);
         } catch (ExpiredJwtException | MalformedJwtException | SignatureException e) {
+            logger.warn("JWT parsing failed for request {}: {}", request.getRequestURI(), e.getMessage());
             JwtResponseUtil.sendError(request, response, HttpStatus.UNAUTHORIZED, "Invalid JWT token");
             return;
         } catch (Exception e) {
+            logger.error("JWT processing error for request {}: {}", request.getRequestURI(), e.getMessage(), e);
             JwtResponseUtil.sendError(request, response, HttpStatus.INTERNAL_SERVER_ERROR, "JWT token processing failed");
             return;
         }
@@ -63,10 +71,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             try {
                 isValid = jwtService.validateToken(jwt, userDetails);
             } catch (Exception ex) {
+                logger.warn("JWT validation exception for user {}: {}", userEmail, ex.getMessage());
                 throw new InvalidTokenException("JWT token validation failed");
             }
 
             if (!isValid) {
+                logger.warn("Invalid/expired JWT for user {}", userEmail);
                 throw new InvalidTokenException("JWT token is invalid or expired");
             }
             SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
@@ -78,6 +88,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             token.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
             securityContext.setAuthentication(token);
             SecurityContextHolder.setContext(securityContext);
+            logger.debug("SecurityContext set for user {}", userEmail);
         }
 
         filterChain.doFilter(request,response);

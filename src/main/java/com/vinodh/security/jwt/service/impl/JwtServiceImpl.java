@@ -10,20 +10,26 @@ import org.springframework.stereotype.Service;
 import java.security.Key;
 import java.util.Date;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class JwtServiceImpl implements IJwtService {
+
+    private static final Logger logger = LoggerFactory.getLogger(JwtServiceImpl.class);
 
     private final Key SECRET_KEY = getSigning();
 
     // generating token
     public String generateToken(UserDetails userDetails) {
-        return Jwts.builder()
+        String token = Jwts.builder()
                 .setSubject(userDetails.getUsername())
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + 1000 * 60 * 24))
                 .signWith(SECRET_KEY, SignatureAlgorithm.HS256)
                 .compact();
+        logger.debug("Generated JWT for user={}, expiresAt={}", userDetails.getUsername(), getExpirationDateFromToken(token));
+        return token;
     }
 
     // extracting userName
@@ -63,7 +69,13 @@ public class JwtServiceImpl implements IJwtService {
     // validation token
     public Boolean validateToken(String token, UserDetails userDetails) {
         final String username = extractUserName(token);
-        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+        boolean valid = (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+        if (!valid) {
+            logger.debug("Token validation failed for user={}, expired={}", username, isTokenExpired(token));
+        } else {
+            logger.debug("Token validated for user={}", username);
+        }
+        return valid;
     }
 
 }
